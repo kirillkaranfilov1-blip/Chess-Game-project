@@ -1,9 +1,5 @@
 import React from 'react';
-
-const PIECE_SYMBOLS = {
-  w: { p: '♙', n: '♘', b: '♗', r: '♖', q: '♕' },
-  b: { p: '♟', n: '♞', b: '♝', r: '♜', q: '♛' },
-};
+import { PieceIcon } from './pieces';
 
 export default function CapturedPieces({ captured, advantage }) {
   const whiteCaptured = captured?.w || [];
@@ -14,9 +10,9 @@ export default function CapturedPieces({ captured, advantage }) {
       {/* Captured by Black (White pieces captured) */}
       <div className="flex items-center gap-1.5 overflow-x-auto max-w-[45%]">
         <span className="text-slate-500 font-mono text-[10px] uppercase">Взято:</span>
-        <div className="flex items-center text-slate-300 font-serif text-sm tracking-tighter">
+        <div className="flex items-center -space-x-1">
           {whiteCaptured.map((p, idx) => (
-            <span key={idx} title={`Белая фигура: ${p}`}>{PIECE_SYMBOLS.w[p]}</span>
+            <PieceIcon key={idx} color="w" type={p} size={22} title={`Белая фигура: ${p}`} className="animate-pop-in" />
           ))}
           {whiteCaptured.length === 0 && <span className="text-slate-600 text-xs">-</span>}
         </div>
@@ -34,9 +30,9 @@ export default function CapturedPieces({ captured, advantage }) {
             +{advantage}
           </span>
         )}
-        <div className="flex items-center text-slate-200 font-serif text-sm tracking-tighter">
+        <div className="flex items-center -space-x-1">
           {blackCaptured.map((p, idx) => (
-            <span key={idx} title={`Черная фигура: ${p}`}>{PIECE_SYMBOLS.b[p]}</span>
+            <PieceIcon key={idx} color="b" type={p} size={22} title={`Черная фигура: ${p}`} className="animate-pop-in" />
           ))}
           {blackCaptured.length === 0 && <span className="text-slate-600 text-xs">-</span>}
         </div>

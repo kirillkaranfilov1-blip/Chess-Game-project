@@ -13,8 +13,10 @@ import {
   AlertTriangle,
   Lightbulb,
   Check,
+  BarChart3,
 } from 'lucide-react';
 import { BOARD_THEMES } from '../data/themes';
+import AICoach from './AICoach';
 
 export default function Sidebar({
   mode,
@@ -44,13 +46,16 @@ export default function Sidebar({
   hintVisible,
   solvedPuzzles,
   evalScore,
+  game,
+  coachKey,
+  onOpenAnalysis,
 }) {
   const [activeTab, setActiveTab] = useState('game'); // 'game' | 'history' | 'themes'
 
   const currentPuzzle = puzzles?.[currentPuzzleIndex];
 
   return (
-    <aside className="w-full lg:w-96 flex flex-col gap-4 bg-slate-900/60 border border-slate-800 rounded-2xl p-4 backdrop-blur-xl shadow-xl">
+    <aside className="w-full lg:w-[380px] lg:shrink-0 flex flex-col gap-4 bg-slate-900/60 border border-slate-800 rounded-2xl p-4 backdrop-blur-xl shadow-xl">
       {/* Top Tabs */}
       <div className="flex items-center gap-1 p-1 bg-slate-950/70 border border-slate-800/80 rounded-xl text-xs font-semibold">
         <button
@@ -190,20 +195,30 @@ export default function Sidebar({
                     {botDifficulty === 'easy' && 'Случайные ходы + зевки'}
                     {botDifficulty === 'medium' && 'Позиционная оценка'}
                     {botDifficulty === 'hard' && 'Minimax + Alpha-Beta'}
+                    {botDifficulty === 'deepseek' && 'Нейросеть DeepSeek'}
+                    {botDifficulty === 'grandmaster' && 'Глубокий движок + DeepSeek'}
                   </span>
                 </div>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-2 gap-2">
                   {[
                     { id: 'easy', label: 'Новичок' },
                     { id: 'medium', label: 'Любитель' },
                     { id: 'hard', label: 'Мастер' },
+                    { id: 'deepseek', label: 'DeepSeek AI' },
+                    { id: 'grandmaster', label: '👑 Гроссмейстер', span: true },
                   ].map((lvl) => (
                     <button
                       key={lvl.id}
                       onClick={() => onDifficultyChange(lvl.id)}
-                      className={`py-2 px-2 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                      className={`py-2 px-2 rounded-lg text-xs font-semibold transition-all cursor-pointer ${lvl.span ? 'col-span-2' : ''} ${
                         botDifficulty === lvl.id
-                          ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
+                          ? lvl.id === 'grandmaster'
+                            ? 'bg-gradient-to-r from-amber-600 to-orange-600 text-white shadow-md shadow-amber-600/30'
+                            : lvl.id === 'deepseek'
+                            ? 'bg-cyan-600 text-white shadow-md shadow-cyan-600/30'
+                            : 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
+                          : lvl.id === 'grandmaster'
+                          ? 'bg-slate-900 border border-amber-700/40 text-amber-300/90 hover:text-white hover:bg-slate-800'
                           : 'bg-slate-900 border border-slate-800 text-slate-400 hover:text-white hover:bg-slate-800'
                       }`}
                     >
@@ -211,7 +226,28 @@ export default function Sidebar({
                     </button>
                   ))}
                 </div>
+                {botDifficulty === 'grandmaster' && (
+                  <p className="text-[10px] text-slate-400 leading-snug animate-slide-up">
+                    Максимальная сложность: движок считает варианты на глубину 5+ с форсированными разменами, а DeepSeek выбирает план среди лучших ходов. Ход занимает 3–6 секунд.
+                  </p>
+                )}
               </div>
+            )}
+
+            {/* Post-game analysis */}
+            {isGameOver && onOpenAnalysis && (
+              <button
+                onClick={onOpenAnalysis}
+                className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-gradient-to-r from-cyan-700/60 to-indigo-700/60 hover:from-cyan-600/70 hover:to-indigo-600/70 border border-cyan-500/30 text-white text-xs font-semibold cursor-pointer animate-slide-up"
+              >
+                <BarChart3 className="w-4 h-4" />
+                Разбор партии с ИИ
+              </button>
+            )}
+
+            {/* AI Coach (bot / pvp) */}
+            {mode !== 'puzzles' && (
+              <AICoach key={coachKey} game={game} moveHistory={moveHistory} />
             )}
 
             {/* Mode Specific: Puzzles Panel */}
@@ -335,12 +371,12 @@ export default function Sidebar({
                       const nextMove = moveHistory[idx + 1];
                       return (
                         <React.Fragment key={idx}>
-                          <div className="flex items-center gap-2 p-1 rounded hover:bg-slate-800/60 text-slate-200">
+                          <div className="flex items-center gap-2 p-1 rounded hover:bg-slate-800/60 text-slate-200 animate-slide-in-right">
                             <span className="text-slate-500 w-5">{roundNum}.</span>
                             <span className="font-semibold text-white">{m.san || m}</span>
                           </div>
                           {nextMove ? (
-                            <div className="flex items-center p-1 rounded hover:bg-slate-800/60 text-slate-300">
+                            <div className="flex items-center p-1 rounded hover:bg-slate-800/60 text-slate-300 animate-slide-in-right">
                               <span className="font-semibold">{nextMove.san || nextMove}</span>
                             </div>
                           ) : (

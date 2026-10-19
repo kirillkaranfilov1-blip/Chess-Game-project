@@ -1,17 +1,19 @@
 import React, { useEffect } from 'react';
 import confetti from 'canvas-confetti';
-import { Trophy, RefreshCw, ArrowRight, Award } from 'lucide-react';
+import { Trophy, RefreshCw, ArrowRight, Award, BarChart3 } from 'lucide-react';
 
-export default function GameOverModal({ isOpen, title, subtitle, isWin, onRestart, onNext, nextLabel }) {
+export default function GameOverModal({ isOpen, title, subtitle, isWin, onRestart, onNext, nextLabel, onAnalyze }) {
   useEffect(() => {
     if (isOpen && isWin) {
       try {
-        confetti({
-          particleCount: 120,
-          spread: 80,
-          origin: { y: 0.6 },
-          colors: ['#6366f1', '#ec4899', '#3b82f6', '#10b981', '#f59e0b']
-        });
+        const colors = ['#6366f1', '#ec4899', '#3b82f6', '#10b981', '#f59e0b'];
+        confetti({ particleCount: 90, spread: 70, origin: { y: 0.6 }, colors, scalar: 1.1 });
+        const t1 = setTimeout(() => confetti({ particleCount: 60, angle: 60, spread: 60, origin: { x: 0, y: 0.7 }, colors }), 220);
+        const t2 = setTimeout(() => confetti({ particleCount: 60, angle: 120, spread: 60, origin: { x: 1, y: 0.7 }, colors }), 380);
+        return () => {
+          clearTimeout(t1);
+          clearTimeout(t2);
+        };
       } catch {}
     }
   }, [isOpen, isWin]);
@@ -20,7 +22,7 @@ export default function GameOverModal({ isOpen, title, subtitle, isWin, onRestar
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-md animate-fade-in px-4">
-      <div className="bg-slate-900/95 border border-slate-800 rounded-3xl p-8 max-w-md w-full shadow-2xl text-center relative overflow-hidden">
+      <div className="bg-slate-900/95 border border-slate-800 rounded-3xl p-8 max-w-md w-full shadow-2xl text-center relative overflow-hidden animate-modal-in">
         {/* Ambient Glow */}
         <div
           className={`absolute -top-24 -left-24 w-48 h-48 rounded-full blur-3xl pointer-events-none ${
@@ -78,6 +80,16 @@ export default function GameOverModal({ isOpen, title, subtitle, isWin, onRestar
             <span>Сыграть снова</span>
           </button>
         </div>
+
+        {onAnalyze && (
+          <button
+            onClick={onAnalyze}
+            className="mt-3 w-full flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-gradient-to-r from-cyan-700/70 to-indigo-700/70 hover:from-cyan-600/80 hover:to-indigo-600/80 border border-cyan-500/30 text-white font-semibold shadow-lg shadow-cyan-900/30 transition-all transform hover:scale-[1.02] active:scale-[0.98] cursor-pointer"
+          >
+            <BarChart3 className="w-4 h-4" />
+            <span>Разбор партии с ИИ</span>
+          </button>
+        )}
       </div>
     </div>
   );

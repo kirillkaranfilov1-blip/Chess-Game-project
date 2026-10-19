@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Chess } from 'chess.js';
 import { Chessboard } from 'react-chessboard';
 import Header from './components/Header';
@@ -6,10 +6,44 @@ import Sidebar from './components/Sidebar';
 import CapturedPieces from './components/CapturedPieces';
 import PromotionModal from './components/PromotionModal';
 import GameOverModal from './components/GameOverModal';
+import GameAnalysis from './components/GameAnalysis';
+import BoardFX from './components/BoardFX';
+import { customPieces } from './components/pieces';
 import { BOARD_THEMES } from './data/themes';
 import { PUZZLES } from './data/puzzles';
 import { sound } from './utils/sound';
 import { getBestMove, evaluateBoard } from './utils/ai';
+import { getDeepSeekMove, getGrandmasterMove } from './utils/deepseek';
+import { resetEngine } from './utils/engineClient';
+
+const BOT_NAMES = {
+  easy: 'Шахматный Бот (Новичок)',
+  medium: 'Шахматный Бот (Любитель)',
+  hard: 'Шахматный Бот (Мастер)',
+  deepseek: 'DeepSeek AI',
+  grandmaster: 'Гроссмейстер DeepSeek',
+};
+const BOT_ICONS = { easy: '🤖', medium: '🤖', hard: '🤖', deepseek: '🧠', grandmaster: '👑' };
+const BOT_SUBTITLES = {
+  easy: 'Случайные ходы + зевки',
+  medium: 'Позиционная оценка',
+  hard: 'Minimax + Alpha-Beta',
+  deepseek: 'Нейросеть DeepSeek',
+  grandmaster: 'Глубокий движок + DeepSeek',
+};
+
+function findKingSquare(chess, color) {
+  const board = chess.board();
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const p = board[r][c];
+      if (p && p.type === 'k' && p.color === color) {
+        return `${String.fromCharCode(97 + c)}${8 - r}`;
+      }
+    }
+  }
+  return null;
+}
 
 // Helper to calculate captured pieces & material difference
 function getCapturedAndAdvantage(chess) {
@@ -58,12 +92,44 @@ export default function App() {
   const [fen, setFen] = useState(() => game.fen());
   const [moveHistory, setMoveHistory] = useState([]);
   const [mode, setMode] = useState('bot'); // 'bot' | 'puzzles' | 'pvp'
-  const [botDifficulty, setBotDifficulty] = useState('medium'); // 'easy' | 'medium' | 'hard'
+  const [botDifficulty, setBotDifficulty] = useState('medium'); // 'easy' | 'medium' | 'hard' | 'deepseek'
   const [isBotThinking, setIsBotThinking] = useState(false);
+  const [botComment, setBotComment] = useState('');
+  const [gameSessionId, setGameSessionId] = useState(0);
   const [currentTheme, setCurrentTheme] = useState('classic');
   const [boardOrientation, setBoardOrientation] = useState('white');
   const [showLegalMoves, setShowLegalMoves] = useState(true);
   const [soundEnabled, setSoundEnabled] = useState(true);
+  const botAbortRef = useRef(null);
+
+  // Visual effects & post-game analysis
+  const [fxEffects, setFxEffects] = useState([]);
+  const fxSeq = useRef(0);
+  const [isAnalysisOpen, setIsAnalysisOpen] = useState(false);
+  const [analysisMoves, setAnalysisMoves] = useState([]);
+
+  const spawnFx = useCallback((move) => {
+    if (!move) return;
+    const id = ++fxSeq.current;
+    const batch = [{ id, type: 'move', from: move.from, to: move.to }];
+    if (move.captured) {
+      batch.push({
+        id: id + 0.5,
+        type: 'capture',
+        square: move.to,
+        color: move.color === 'w' ? 'rgba(251, 191, 36, 0.95)' : 'rgba(129, 140, 248, 0.95)',
+      });
+    }
+    if (move.san.includes('O-O')) {
+      const rank = move.color === 'w' ? '1' : '8';
+      const rookTo = move.san.includes('O-O-O') ? `d${rank}` : `f${rank}`;
+      batch.push({ id: id + 0.25, type: 'ring', square: rookTo, color: 'rgba(56, 189, 248, 0.9)' });
+    }
+    setFxEffects((prev) => [...prev, ...batch]);
+    setTimeout(() => {
+      setFxEffects((prev) => prev.filter((f) => !batch.some((b) => b.id === f.id)));
+    }, 800);
+  }, []);
 
   // Selected square for click-to-move
   const [selectedSquare, setSelectedSquare] = useState(null);
@@ -118,37 +184,66 @@ export default function App() {
   // Bot Turn Trigger
   useEffect(() => {
     if (mode !== 'bot') return;
-    if (game.turn() === 'b' && !game.isGameOver()) {
-      const timer = setTimeout(() => {
-        setIsBotThinking(true);
-        setTimeout(() => {
-          try {
-            const botMove = getBestMove(game, botDifficulty);
-            if (botMove) {
-              const moveResult = game.move(botMove);
-              if (moveResult) {
-                setFen(game.fen());
-                setMoveHistory([...game.history({ verbose: true })]);
+    if (game.turn() !== 'b' || game.isGameOver()) return;
 
-                if (moveResult.captured) sound.playCapture();
-                else if (moveResult.san.includes('O-O')) sound.playCastle();
-                else sound.playMove();
+    let cancelled = false;
+    const fenAtStart = game.fen();
+    botAbortRef.current?.abort();
+    const controller = new AbortController();
+    botAbortRef.current = controller;
 
-                if (game.isCheck()) sound.playCheck();
-                checkGameOver(game);
-              }
-            }
-          } catch (e) {
-            console.error('Bot move error', e);
-          } finally {
-            setIsBotThinking(false);
+    const timer = setTimeout(async () => {
+      setIsBotThinking(true);
+      try {
+        let botMove = null;
+        let comment = '';
+
+        if (botDifficulty === 'deepseek') {
+          const result = await getDeepSeekMove(game, { signal: controller.signal });
+          botMove = result.move;
+          comment = result.comment || '';
+        } else if (botDifficulty === 'grandmaster') {
+          const result = await getGrandmasterMove(game, { signal: controller.signal });
+          botMove = result?.move || null;
+          comment = result?.comment || '';
+        } else {
+          await new Promise((r) => setTimeout(r, 350));
+          botMove = getBestMove(game, botDifficulty);
+        }
+
+        if (cancelled || fenAtStart !== game.fen()) return;
+
+        if (botMove) {
+          const moveResult = game.move({ from: botMove.from, to: botMove.to, promotion: botMove.promotion });
+          if (moveResult) {
+            setFen(game.fen());
+            setMoveHistory([...game.history({ verbose: true })]);
+            setBotComment(comment);
+            spawnFx(moveResult);
+
+            if (moveResult.captured) sound.playCapture();
+            else if (moveResult.san.includes('O-O')) sound.playCastle();
+            else sound.playMove();
+
+            if (game.isCheck()) sound.playCheck();
+            checkGameOver(game);
           }
-        }, 350);
-      }, 50);
+        }
+      } catch (e) {
+        if (!cancelled && e.name !== 'AbortError') {
+          console.error('Bot move error', e);
+        }
+      } finally {
+        if (!cancelled) setIsBotThinking(false);
+      }
+    }, 50);
 
-      return () => clearTimeout(timer);
-    }
-  }, [fen, mode, botDifficulty, game, checkGameOver]);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [fen, mode, botDifficulty, game, checkGameOver, spawnFx]);
 
   // Load Puzzle
   const loadPuzzle = useCallback((index) => {
@@ -170,7 +265,11 @@ export default function App() {
   const handleModeChange = (newMode) => {
     setMode(newMode);
     setIsGameOverModalOpen(false);
+    setIsAnalysisOpen(false);
     setSelectedSquare(null);
+    setBotComment('');
+    setFxEffects([]);
+    resetEngine();
     if (newMode === 'puzzles') {
       loadPuzzle(currentPuzzleIndex);
     } else {
@@ -179,13 +278,19 @@ export default function App() {
       setFen(newG.fen());
       setMoveHistory([]);
       setBoardOrientation('white');
+      setGameSessionId((id) => id + 1);
     }
   };
 
   // Reset Game
   const handleResetGame = () => {
     setIsGameOverModalOpen(false);
+    setIsAnalysisOpen(false);
     setSelectedSquare(null);
+    setBotComment('');
+    setFxEffects([]);
+    botAbortRef.current?.abort();
+    resetEngine();
     if (mode === 'puzzles') {
       loadPuzzle(currentPuzzleIndex);
     } else {
@@ -193,6 +298,7 @@ export default function App() {
       setGame(newG);
       setFen(newG.fen());
       setMoveHistory([]);
+      setGameSessionId((id) => id + 1);
     }
   };
 
@@ -211,6 +317,7 @@ export default function App() {
     setFen(game.fen());
     setMoveHistory([...game.history({ verbose: true })]);
     setSelectedSquare(null);
+    setBotComment('');
     sound.playMove();
   };
 
@@ -231,6 +338,7 @@ export default function App() {
         setFen(game.fen());
         setMoveHistory([...game.history({ verbose: true })]);
         setSelectedSquare(null);
+        spawnFx(move);
 
         // In puzzle mode, validate puzzle move sequence
         if (mode === 'puzzles') {
@@ -290,8 +398,17 @@ export default function App() {
         return false;
       }
     },
-    [game, mode, currentPuzzleIndex, puzzleMoveStep, checkGameOver]
+    [game, mode, currentPuzzleIndex, puzzleMoveStep, checkGameOver, spawnFx]
   );
+
+  // Open post-game analysis (snapshot the move list so later changes don't affect it)
+  const handleOpenAnalysis = () => {
+    const sans = game.history();
+    if (sans.length === 0) return;
+    setAnalysisMoves(sans);
+    setIsGameOverModalOpen(false);
+    setIsAnalysisOpen(true);
+  };
 
   // Piece Drop Handler (react-chessboard v5)
   const onPieceDrop = ({ sourceSquare, targetSquare, piece }) => {
@@ -430,6 +547,24 @@ export default function App() {
   const themeObj = BOARD_THEMES[currentTheme] || BOARD_THEMES.classic;
   const { captured, advantage } = getCapturedAndAdvantage(game);
   const evalScore = evaluateBoard(game);
+  const inCheck = game.isCheck();
+  const isMate = game.isCheckmate();
+  const checkSquare = inCheck ? findKingSquare(game, game.turn()) : null;
+  const thinkingClass =
+    isBotThinking
+      ? botDifficulty === 'grandmaster'
+        ? 'is-thinking-gold'
+        : botDifficulty === 'deepseek'
+        ? 'is-thinking-cyan'
+        : 'is-thinking'
+      : '';
+  const resultText = isMate
+    ? `Мат. Победили ${game.turn() === 'w' ? 'чёрные' : 'белые'}`
+    : game.isStalemate()
+    ? 'Пат — ничья'
+    : game.isDraw()
+    ? 'Ничья'
+    : 'Партия не окончена';
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col selection:bg-indigo-500 selection:text-white">
@@ -442,28 +577,45 @@ export default function App() {
       />
 
       {/* Main Content Arena */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8 flex flex-col lg:flex-row items-center lg:items-start justify-center gap-6 lg:gap-8">
+      <main className="flex-1 max-w-[1600px] w-full mx-auto p-3 sm:p-5 lg:p-6 flex flex-col lg:flex-row items-center lg:items-start justify-center gap-5 lg:gap-7">
         {/* Chessboard Column */}
-        <div className="flex flex-col items-center gap-3 w-full max-w-[560px]">
+        <div className="flex flex-col items-center gap-3 w-[min(94vw,calc(100vh-220px),860px)]">
           {/* Top Player Card (Black or Opponent) */}
           <div className="w-full flex items-center justify-between px-3 py-2 bg-slate-900/80 border border-slate-800 rounded-xl backdrop-blur-md shadow-md">
-            <div className="flex items-center gap-2.5">
-              <div className="w-8 h-8 rounded-lg bg-slate-800 border border-slate-700 flex items-center justify-center text-lg text-slate-300">
-                {mode === 'bot' ? '🤖' : '♟'}
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div
+                className={`w-8 h-8 shrink-0 rounded-lg border flex items-center justify-center text-lg ${
+                  mode === 'bot' && botDifficulty === 'grandmaster'
+                    ? 'bg-amber-500/15 border-amber-500/40'
+                    : mode === 'bot' && botDifficulty === 'deepseek'
+                    ? 'bg-cyan-500/15 border-cyan-500/40'
+                    : 'bg-slate-800 border-slate-700 text-slate-300'
+                }`}
+              >
+                {mode === 'bot' ? BOT_ICONS[botDifficulty] || '🤖' : '♟'}
               </div>
-              <div>
-                <h3 className="text-xs font-bold text-white leading-tight">
-                  {mode === 'bot' ? `Шахматный Бот (${botDifficulty})` : mode === 'puzzles' ? 'Защитник' : 'Игрок 2 (Черные)'}
+              <div className="min-w-0">
+                <h3 className="text-xs font-bold text-white leading-tight truncate">
+                  {mode === 'bot'
+                    ? BOT_NAMES[botDifficulty] || 'Шахматный Бот'
+                    : mode === 'puzzles'
+                    ? 'Защитник'
+                    : 'Игрок 2 (Черные)'}
                 </h3>
-                <span className="text-[10px] text-slate-400">
-                  {mode === 'bot' ? 'Уровень: ' + botDifficulty : 'Рейтинг: 1500'}
+                <span key={botComment} className="text-[10px] text-slate-400 block truncate animate-slide-in-right">
+                  {mode === 'bot' ? botComment || BOT_SUBTITLES[botDifficulty] || '' : 'Рейтинг: 1500'}
                 </span>
               </div>
             </div>
 
             {isBotThinking && (
-              <span className="text-[11px] font-semibold text-indigo-400 flex items-center gap-1.5 animate-pulse">
-                Думает...
+              <span
+                className={`text-[11px] font-semibold flex items-center gap-2 shrink-0 ml-2 ${
+                  botDifficulty === 'grandmaster' ? 'text-amber-400' : botDifficulty === 'deepseek' ? 'text-cyan-400' : 'text-indigo-400'
+                }`}
+              >
+                {botDifficulty === 'grandmaster' ? 'Считает варианты' : 'Думает'}
+                <span className="thinking-dots"><i /><i /><i /></span>
               </span>
             )}
           </div>
@@ -474,20 +626,32 @@ export default function App() {
           </div>
 
           {/* Chessboard Wrapper with rich glow frame */}
-          <div className="relative w-full aspect-square rounded-2xl p-2 sm:p-3 bg-gradient-to-b from-slate-800/90 to-slate-900/90 border border-slate-700/60 shadow-2xl overflow-hidden group">
-            <div className="w-full h-full rounded-xl overflow-hidden shadow-inner">
+          <div
+            key={`${mode}-${gameSessionId}`}
+            className={`relative w-full aspect-square rounded-2xl p-1 sm:p-1.5 bg-gradient-to-b from-slate-800/90 to-slate-900/90 border border-slate-700/60 shadow-2xl group animate-board-in transition-shadow duration-500 ${thinkingClass}`}
+          >
+            <div className="relative w-full h-full rounded-xl overflow-hidden shadow-inner">
               <Chessboard
                 options={{
                   position: fen,
                   onPieceDrop: onPieceDrop,
                   onSquareClick: onSquareClick,
                   boardOrientation: boardOrientation,
+                  pieces: customPieces,
                   darkSquareStyle: { backgroundColor: themeObj.dark },
                   lightSquareStyle: { backgroundColor: themeObj.light },
                   squareStyles: getCustomSquareStyles(),
-                  animationDurationInMs: 250,
+                  animationDurationInMs: 280,
                   showAnimations: true,
+                  dropSquareStyle: { boxShadow: 'inset 0 0 0 4px rgba(99, 102, 241, 0.75)' },
+                  draggingPieceStyle: { transform: 'scale(1.12)', filter: 'drop-shadow(0 10px 12px rgba(0,0,0,0.5))' },
                 }}
+              />
+              <BoardFX
+                effects={fxEffects}
+                orientation={boardOrientation}
+                checkSquare={checkSquare}
+                mateSquare={isMate ? checkSquare : null}
               />
             </div>
           </div>
@@ -562,6 +726,9 @@ export default function App() {
           hintVisible={hintVisible}
           solvedPuzzles={solvedPuzzles}
           evalScore={evalScore}
+          game={game}
+          coachKey={`${mode}-${gameSessionId}`}
+          onOpenAnalysis={mode !== 'puzzles' && moveHistory.length > 0 ? handleOpenAnalysis : null}
         />
       </main>
 
@@ -588,6 +755,19 @@ export default function App() {
             : null
         }
         nextLabel="Следующая задача"
+        onAnalyze={mode !== 'puzzles' && moveHistory.length > 0 ? handleOpenAnalysis : null}
+      />
+
+      {/* Post-game Analysis */}
+      <GameAnalysis
+        isOpen={isAnalysisOpen}
+        onClose={() => setIsAnalysisOpen(false)}
+        sanMoves={analysisMoves}
+        resultText={resultText}
+        playerColor="w"
+        theme={themeObj}
+        pieces={customPieces}
+        boardOrientation={boardOrientation}
       />
     </div>
   );

@@ -76,6 +76,8 @@ const KING_TABLE = [
   [20, 30, 10, 0, 0, 10, 30, 20],
 ];
 
+export { PIECE_VALUES, PAWN_TABLE, KNIGHT_TABLE, BISHOP_TABLE, ROOK_TABLE, QUEEN_TABLE, KING_TABLE };
+
 function getPieceTableScore(piece, row, col, color) {
   const r = color === 'w' ? row : 7 - row;
   const c = col;
